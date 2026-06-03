@@ -54,6 +54,7 @@ def _launch_setup(context, *args, **kwargs):
     overrides['publish_image'] = LaunchConfiguration('publish_image').perform(context).lower() == 'true'
     overrides['publish_pointcloud'] = LaunchConfiguration('publish_pointcloud').perform(context).lower() == 'true'
     overrides['publish_depth'] = LaunchConfiguration('publish_depth').perform(context).lower() == 'true'
+    overrides['pointcloud_rate'] = float(LaunchConfiguration('pointcloud_rate').perform(context))
 
     node = Node(
         package='zed_slam',
@@ -94,6 +95,11 @@ def generate_launch_description():
             'publish_depth',
             default_value='false',
             description='Publish depth image on /zed/zed_node/depth/depth_registered',
+        ),
+        DeclareLaunchArgument(
+            'pointcloud_rate',
+            default_value='5.0',
+            description='Point cloud publish rate in Hz (runs in its own thread)',
         ),
         OpaqueFunction(function=_launch_setup),
     ])

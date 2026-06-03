@@ -23,3 +23,4 @@
     publish_image: false
     publish_pointcloud: false
     publish_depth: false
+    pointcloud_rate: 5.0  # Hz; point cloud runs in its own thread at this rate

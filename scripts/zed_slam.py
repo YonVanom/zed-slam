@@ -61,6 +61,7 @@ class ZEDSLAMNode(Node):
         self.declare_parameter('publish_image', False)
         self.declare_parameter('publish_pointcloud', False)
         self.declare_parameter('publish_depth', False)
+        self.declare_parameter('pointcloud_rate', 5.0)
 
         self.fps = self.get_parameter('fps').value
         self.resolution = self.get_parameter('resolution').value
@@ -72,6 +73,7 @@ class ZEDSLAMNode(Node):
         self.publish_image = self.get_parameter('publish_image').value
         self.publish_pointcloud = self.get_parameter('publish_pointcloud').value
         self.publish_depth = self.get_parameter('publish_depth').value
+        self.pointcloud_rate = self.get_parameter('pointcloud_rate').value
 
         if self.publish_image:
             self.img_pub   = self.create_publisher(Image,       '/zed/zed_node/left/image_rect_color', 1)
@@ -82,6 +84,8 @@ class ZEDSLAMNode(Node):
         if self.publish_pointcloud:
             self.pc_pub    = self.create_publisher(PointCloud2, '/zed/zed_node/point_cloud/cloud_registered', 1)
             self.pc_mat    = sl.Mat()
+            self.pc_thread = threading.Thread(target=self._pc_loop, daemon=True)
+            self.pc_thread.start()
 
         # ---------------- State ----------------
         self.path_poses = deque(maxlen=500)
@@ -134,6 +138,41 @@ class ZEDSLAMNode(Node):
         last = self.path_poses[-1].pose.position
         dx, dy, dz = x - last.x, y - last.y, z - last.z
         return dx*dx + dy*dy + dz*dz > MIN_DIST_SQ
+
+    def _pc_loop(self):
+        interval = 1.0 / self.pointcloud_rate
+        while self.running and rclpy.ok():
+            t0 = time.monotonic()
+
+            if self.pc_pub.get_subscription_count() > 0:
+                self.zed.retrieve_measure(self.pc_mat, sl.MEASURE.XYZRGBA)
+                pc_np = self.pc_mat.get_data()
+                h, w  = pc_np.shape[:2]
+                # ZED RGBA [R,G,B,A] → ROS "rgb" expects BGRA [B,G,R,pad]; swap bytes 12↔14
+                pc_u8 = np.ascontiguousarray(pc_np).view(np.uint8).reshape(h, w, 16)
+                pc_u8[:, :, [12, 14]] = pc_u8[:, :, [14, 12]]
+                pc_msg = PointCloud2()
+                pc_msg.header.stamp    = self.get_clock().now().to_msg()
+                pc_msg.header.frame_id = 'zed_left_camera_frame'
+                pc_msg.height     = h
+                pc_msg.width      = w
+                pc_msg.fields     = [
+                    PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
+                    PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
+                    PointField(name='z',   offset=8,  datatype=PointField.FLOAT32, count=1),
+                    PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+                ]
+                pc_msg.is_bigendian = False
+                pc_msg.point_step   = 16
+                pc_msg.row_step     = w * 16
+                pc_msg.is_dense     = False
+                pc_msg.data         = pc_u8.tobytes()
+                self.pc_pub.publish(pc_msg)
+
+            elapsed = time.monotonic() - t0
+            sleep_t = interval - elapsed
+            if sleep_t > 0:
+                time.sleep(sleep_t)
 
     def grab_loop(self):
         while self.running and rclpy.ok():
@@ -188,33 +227,6 @@ class ZEDSLAMNode(Node):
                 depth_msg.step         = depth_np.shape[1] * 4
                 depth_msg.data         = depth_np.tobytes()
                 self.depth_pub.publish(depth_msg)
-
-            # ---------------- Point Cloud Publish ----------------
-            if self.publish_pointcloud and self.pc_pub.get_subscription_count() > 0:
-                self.zed.retrieve_measure(self.pc_mat, sl.MEASURE.XYZRGBA)
-                pc_np = self.pc_mat.get_data()     # H×W×4 float32 (x, y, z, rgba_as_float)
-                h, w  = pc_np.shape[:2]
-                # ZED color bytes are RGBA [R,G,B,A]; ROS "rgb" expects BGRA [B,G,R,pad]
-                # Swap bytes 12 (R) and 14 (B) within each 16-byte point
-                pc_u8 = np.ascontiguousarray(pc_np).view(np.uint8).reshape(h, w, 16)
-                pc_u8[:, :, [12, 14]] = pc_u8[:, :, [14, 12]]
-                pc_msg = PointCloud2()
-                pc_msg.header.stamp = stamp
-                pc_msg.header.frame_id = 'zed_left_camera_frame'
-                pc_msg.height = h
-                pc_msg.width  = w
-                pc_msg.fields = [
-                    PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
-                    PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
-                    PointField(name='z',   offset=8,  datatype=PointField.FLOAT32, count=1),
-                    PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
-                ]
-                pc_msg.is_bigendian = False
-                pc_msg.point_step   = 16
-                pc_msg.row_step     = w * 16
-                pc_msg.is_dense     = False
-                pc_msg.data         = pc_u8.tobytes()
-                self.pc_pub.publish(pc_msg)
 
             # ---------------- Diagnostic Publish ----------------
             diag_status = DiagnosticStatus()
@@ -310,6 +322,8 @@ class ZEDSLAMNode(Node):
     def destroy_node(self):
         self.running = False
         self.grab_thread.join()
+        if self.publish_pointcloud:
+            self.pc_thread.join()
 
         if self.update_map and self.area_file:
             self.get_logger().info("Saving area map before shutdown...")
