@@ -48,10 +48,6 @@ class ZEDSLAMNode(Node):
         self.status_pub = self.create_publisher(DiagnosticArray, '/zed/spatial_memory_status', 10)
         self.path_pub   = self.create_publisher(Path,          '/zed/path', 10)
         self.odom_pub   = self.create_publisher(Odometry,      'odom', 10)
-        self.img_pub    = self.create_publisher(Image,       '/zed/zed_node/left/image_rect_color', 1)
-        self.depth_pub  = self.create_publisher(Image,       '/zed/zed_node/depth/depth_registered', 1)
-        self.pc_pub     = self.create_publisher(PointCloud2, '/zed/zed_node/point_cloud/cloud_registered', 1)
-
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # ---------------- Load Config ----------------
@@ -77,12 +73,19 @@ class ZEDSLAMNode(Node):
         self.publish_pointcloud = self.get_parameter('publish_pointcloud').value
         self.publish_depth = self.get_parameter('publish_depth').value
 
+        if self.publish_image:
+            self.img_pub   = self.create_publisher(Image,       '/zed/zed_node/left/image_rect_color', 1)
+            self.img_mat   = sl.Mat()
+        if self.publish_depth:
+            self.depth_pub = self.create_publisher(Image,       '/zed/zed_node/depth/depth_registered', 1)
+            self.depth_mat = sl.Mat()
+        if self.publish_pointcloud:
+            self.pc_pub    = self.create_publisher(PointCloud2, '/zed/zed_node/point_cloud/cloud_registered', 1)
+            self.pc_mat    = sl.Mat()
+
         # ---------------- State ----------------
         self.path_poses = deque(maxlen=500)
         self.last_mem_status = None
-        self.img_mat   = sl.Mat()
-        self.depth_mat = sl.Mat()
-        self.pc_mat    = sl.Mat()
 
         # ---------------- Camera Init ----------------
         self.zed = sl.Camera()
