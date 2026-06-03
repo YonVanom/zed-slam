@@ -194,6 +194,10 @@ class ZEDSLAMNode(Node):
                 self.zed.retrieve_measure(self.pc_mat, sl.MEASURE.XYZRGBA)
                 pc_np = self.pc_mat.get_data()     # H×W×4 float32 (x, y, z, rgba_as_float)
                 h, w  = pc_np.shape[:2]
+                # ZED color bytes are RGBA [R,G,B,A]; ROS "rgb" expects BGRA [B,G,R,pad]
+                # Swap bytes 12 (R) and 14 (B) within each 16-byte point
+                pc_u8 = np.ascontiguousarray(pc_np).view(np.uint8).reshape(h, w, 16)
+                pc_u8[:, :, [12, 14]] = pc_u8[:, :, [14, 12]]
                 pc_msg = PointCloud2()
                 pc_msg.header.stamp = stamp
                 pc_msg.header.frame_id = 'zed_left_camera_frame'
@@ -209,7 +213,7 @@ class ZEDSLAMNode(Node):
                 pc_msg.point_step   = 16
                 pc_msg.row_step     = w * 16
                 pc_msg.is_dense     = False
-                pc_msg.data         = pc_np.tobytes()
+                pc_msg.data         = pc_u8.tobytes()
                 self.pc_pub.publish(pc_msg)
 
             # ---------------- Diagnostic Publish ----------------
