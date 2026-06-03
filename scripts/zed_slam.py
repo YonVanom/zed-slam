@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 import pyzed.sl as sl
@@ -42,6 +42,7 @@ class ZEDSLAMNode(Node):
 
         # -------------- Publishers ---------------------
         self.pose_pub = self.create_publisher(PoseStamped, '/zed/zed_node/pose', 10)
+        self.pose_with_covariance_pub = self.create_publisher(PoseWithCovarianceStamped, '/zed/zed_node/pose_with_covariance', 10)
         self.status_pub = self.create_publisher(DiagnosticArray, '/zed/spatial_memory_status', 10)
         self.path_pub = self.create_publisher(Path, '/zed/path', 10)
         self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
@@ -76,7 +77,7 @@ class ZEDSLAMNode(Node):
         init_params.camera_resolution = RESOLUTIONS[self.resolution]
         init_params.camera_fps = self.fps
         init_params.coordinate_units = sl.UNIT.METER
-        init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Z_UP
+        init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Z_UP_X_FWD
         init_params.depth_mode = DEPTH_MODE[self.depth_mode]
 
         if self.zed.open(init_params) != sl.ERROR_CODE.SUCCESS:
@@ -165,6 +166,14 @@ class ZEDSLAMNode(Node):
             pose_msg.pose.orientation.w = w_or
 
             self.pose_pub.publish(pose_msg)
+            
+            pose_with_covariance_msg = PoseWithCovarianceStamped()
+            pose_with_covariance_msg.header.stamp = stamp
+            pose_with_covariance_msg.header.frame_id = "map"
+            pose_with_covariance_msg.pose.pose = pose_msg.pose
+            pose_with_covariance_msg.pose.covariance = self.pose.pose_covariance.flatten().tolist()
+            
+            self.pose_with_covariance_pub.publish(pose_with_covariance_msg)
 
             # ---------------- Odom Publish ----------------
             odom_msg = Odometry()

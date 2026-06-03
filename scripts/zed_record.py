@@ -20,12 +20,19 @@ RESOLUTIONS = {
     "SVGA":   sl.RESOLUTION.SVGA,
 }
 
+DEPTH_MODE = {
+    "NEURAL_LIGHT": sl.DEPTH_MODE.NEURAL_LIGHT,
+    "NEURAL": sl.DEPTH_MODE.NEURAL,
+    "NEURAL_PLUS": sl.DEPTH_MODE.NEURAL_PLUS
+}
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Record ZED camera to an SVO file.")
-    parser.add_argument("--output", default="test_svo.svo2", help="Output .svo2 file path")
+    parser.add_argument("--output", default="test_svo.svo2", help="Output .svo2 file name")
     parser.add_argument("--dir", default="/home/nvidia/ros2_ws/src/zedx_pure_pursuit/data/svo", help="Output directory")
     parser.add_argument("--fps", type=int, default=60, choices=[15, 30, 60, 120], help="Camera FPS (default: 60)")
     parser.add_argument("--resolution", default="SVGA", choices=RESOLUTIONS.keys(), help="Camera resolution (default: SVGA)")
+    parser.add_argument("--depth_mode", default="NEURAL_LIGHT", choices=DEPTH_MODE.keys(), help="Camera resolution (default: SVGA)")
     return parser.parse_args()
 
 def main():
@@ -39,10 +46,10 @@ def main():
     init_params.camera_resolution = RESOLUTIONS[args.resolution]
     init_params.camera_fps = args.fps
     init_params.coordinate_units = sl.UNIT.METER
-    init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Z_UP
-    init_params.depth_mode = sl.DEPTH_MODE.NEURAL_LIGHT
+    init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Z_UP_X_FWD
+    init_params.depth_mode = DEPTH_MODE[args.depth_mode]
 
-    log.info("Opening camera | resolution=%s fps=%d", args.resolution, args.fps)
+    log.info("Opening camera | resolution=%s fps=%d depth_mode=%s", args.resolution, args.fps, args.depth_mode)
     if zed.open(init_params) != sl.ERROR_CODE.SUCCESS:
         log.error("Failed to open ZED camera")
         sys.exit(1)
