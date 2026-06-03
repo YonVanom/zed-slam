@@ -51,6 +51,9 @@ def _launch_setup(context, *args, **kwargs):
         )
 
     overrides = MODE_OVERRIDES[mode]
+    overrides['publish_image'] = LaunchConfiguration('publish_image').perform(context).lower() == 'true'
+    overrides['publish_pointcloud'] = LaunchConfiguration('publish_pointcloud').perform(context).lower() == 'true'
+    overrides['publish_depth'] = LaunchConfiguration('publish_depth').perform(context).lower() == 'true'
 
     node = Node(
         package='zed_slam',
@@ -76,6 +79,21 @@ def generate_launch_description():
                 'Operating mode: '
                 '"localize" (default) | "lifetime" | "mapping"'
             ),
+        ),
+        DeclareLaunchArgument(
+            'publish_image',
+            default_value='false',
+            description='Publish left rectified image on /zed/zed_node/left/image_rect_color',
+        ),
+        DeclareLaunchArgument(
+            'publish_pointcloud',
+            default_value='false',
+            description='Publish point cloud on /zed/zed_node/point_cloud/cloud_registered',
+        ),
+        DeclareLaunchArgument(
+            'publish_depth',
+            default_value='false',
+            description='Publish depth image on /zed/zed_node/depth/depth_registered',
         ),
         OpaqueFunction(function=_launch_setup),
     ])

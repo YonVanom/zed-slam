@@ -18,3 +18,8 @@
     update_map: false
 
     enable_localization_only : false
+
+    # Sensor data publishing (disabled by default — high bandwidth)
+    publish_image: false
+    publish_pointcloud: false
+    publish_depth: false

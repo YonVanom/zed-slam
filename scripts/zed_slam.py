@@ -12,7 +12,9 @@ import threading
 import time
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from nav_msgs.msg import Path, Odometry
+from sensor_msgs.msg import Image, PointCloud2, PointField
 from collections import deque
+import numpy as np
 
 MIN_DIST_SQ = 1.0 ** 2
 
@@ -41,11 +43,14 @@ class ZEDSLAMNode(Node):
         super().__init__('zed_positional_tracking_node')
 
         # -------------- Publishers ---------------------
-        self.pose_pub = self.create_publisher(PoseStamped, '/zed/zed_node/pose', 10)
+        self.pose_pub               = self.create_publisher(PoseStamped,              '/zed/zed_node/pose', 10)
         self.pose_with_covariance_pub = self.create_publisher(PoseWithCovarianceStamped, '/zed/zed_node/pose_with_covariance', 10)
         self.status_pub = self.create_publisher(DiagnosticArray, '/zed/spatial_memory_status', 10)
-        self.path_pub = self.create_publisher(Path, '/zed/path', 10)
-        self.odom_pub = self.create_publisher(Odometry, 'odom', 10)
+        self.path_pub   = self.create_publisher(Path,          '/zed/path', 10)
+        self.odom_pub   = self.create_publisher(Odometry,      'odom', 10)
+        self.img_pub    = self.create_publisher(Image,       '/zed/zed_node/left/image_rect_color', 1)
+        self.depth_pub  = self.create_publisher(Image,       '/zed/zed_node/depth/depth_registered', 1)
+        self.pc_pub     = self.create_publisher(PointCloud2, '/zed/zed_node/point_cloud/cloud_registered', 1)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -57,7 +62,9 @@ class ZEDSLAMNode(Node):
         self.declare_parameter('initial_mapping', False)
         self.declare_parameter('update_map', True)
         self.declare_parameter('enable_localization_only', False)
-
+        self.declare_parameter('publish_image', False)
+        self.declare_parameter('publish_pointcloud', False)
+        self.declare_parameter('publish_depth', False)
 
         self.fps = self.get_parameter('fps').value
         self.resolution = self.get_parameter('resolution').value
@@ -66,10 +73,16 @@ class ZEDSLAMNode(Node):
         self.update_map = self.get_parameter('update_map').value
         self.depth_mode = self.get_parameter('depth_mode').value
         self.enable_localization_only = self.get_parameter('enable_localization_only').value
+        self.publish_image = self.get_parameter('publish_image').value
+        self.publish_pointcloud = self.get_parameter('publish_pointcloud').value
+        self.publish_depth = self.get_parameter('publish_depth').value
 
         # ---------------- State ----------------
         self.path_poses = deque(maxlen=500)
         self.last_mem_status = None
+        self.img_mat   = sl.Mat()
+        self.depth_mat = sl.Mat()
+        self.pc_mat    = sl.Mat()
 
         # ---------------- Camera Init ----------------
         self.zed = sl.Camera()
@@ -142,6 +155,59 @@ class ZEDSLAMNode(Node):
             x_or, y_or, z_or, w_or = o.get()
 
             stamp = self.get_clock().now().to_msg()
+
+            # ---------------- Image Publish ----------------
+            if self.publish_image and self.img_pub.get_subscription_count() > 0:
+                self.zed.retrieve_image(self.img_mat, sl.VIEW.LEFT)
+                img_np = self.img_mat.get_data()   # H×W×4 uint8 BGRA
+                img_msg = Image()
+                img_msg.header.stamp = stamp
+                img_msg.header.frame_id = 'zed_left_camera_optical_frame'
+                img_msg.height = img_np.shape[0]
+                img_msg.width  = img_np.shape[1]
+                img_msg.encoding     = 'bgra8'
+                img_msg.is_bigendian = False
+                img_msg.step         = img_np.shape[1] * 4
+                img_msg.data         = img_np.tobytes()
+                self.img_pub.publish(img_msg)
+
+            # ---------------- Depth Publish ----------------
+            if self.publish_depth and self.depth_pub.get_subscription_count() > 0:
+                self.zed.retrieve_measure(self.depth_mat, sl.MEASURE.DEPTH)
+                depth_np = self.depth_mat.get_data()   # H×W float32, metres
+                depth_msg = Image()
+                depth_msg.header.stamp = stamp
+                depth_msg.header.frame_id = 'zed_left_camera_optical_frame'
+                depth_msg.height = depth_np.shape[0]
+                depth_msg.width  = depth_np.shape[1]
+                depth_msg.encoding     = '32FC1'
+                depth_msg.is_bigendian = False
+                depth_msg.step         = depth_np.shape[1] * 4
+                depth_msg.data         = depth_np.tobytes()
+                self.depth_pub.publish(depth_msg)
+
+            # ---------------- Point Cloud Publish ----------------
+            if self.publish_pointcloud and self.pc_pub.get_subscription_count() > 0:
+                self.zed.retrieve_measure(self.pc_mat, sl.MEASURE.XYZRGBA)
+                pc_np = self.pc_mat.get_data()     # H×W×4 float32 (x, y, z, rgba_as_float)
+                h, w  = pc_np.shape[:2]
+                pc_msg = PointCloud2()
+                pc_msg.header.stamp = stamp
+                pc_msg.header.frame_id = 'zed_left_camera_frame'
+                pc_msg.height = h
+                pc_msg.width  = w
+                pc_msg.fields = [
+                    PointField(name='x',   offset=0,  datatype=PointField.FLOAT32, count=1),
+                    PointField(name='y',   offset=4,  datatype=PointField.FLOAT32, count=1),
+                    PointField(name='z',   offset=8,  datatype=PointField.FLOAT32, count=1),
+                    PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1),
+                ]
+                pc_msg.is_bigendian = False
+                pc_msg.point_step   = 16
+                pc_msg.row_step     = w * 16
+                pc_msg.is_dense     = False
+                pc_msg.data         = pc_np.tobytes()
+                self.pc_pub.publish(pc_msg)
 
             # ---------------- Diagnostic Publish ----------------
             diag_status = DiagnosticStatus()
