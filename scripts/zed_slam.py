@@ -84,10 +84,9 @@ class ZEDSLAMNode(Node):
         if self.publish_pointcloud:
             self.pc_pub    = self.create_publisher(PointCloud2, '/zed/zed_node/point_cloud/cloud_registered', 1)
             self.pc_mat    = sl.Mat()
-            self.pc_thread = threading.Thread(target=self._pc_loop, daemon=True)
-            self.pc_thread.start()
 
         # ---------------- State ----------------
+        self.running = False
         self.path_poses = deque(maxlen=500)
         self.last_mem_status = None
 
@@ -130,6 +129,9 @@ class ZEDSLAMNode(Node):
 
         self.grab_thread = threading.Thread(target=self.grab_loop)
         self.grab_thread.start()
+        if self.publish_pointcloud:
+            self.pc_thread = threading.Thread(target=self._pc_loop, daemon=True)
+            self.pc_thread.start()
         self.get_logger().info("ZED Positional Tracking Node started")
 
     def _moved_enough(self, x, y, z):
