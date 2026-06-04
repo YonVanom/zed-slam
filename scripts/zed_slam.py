@@ -62,6 +62,8 @@ class ZEDSLAMNode(Node):
         self.declare_parameter('publish_pointcloud', False)
         self.declare_parameter('publish_depth', False)
         self.declare_parameter('pointcloud_rate', 5.0)
+        self.declare_parameter('pointcloud_width',  448)
+        self.declare_parameter('pointcloud_height', 256)
 
         self.fps = self.get_parameter('fps').value
         self.resolution = self.get_parameter('resolution').value
@@ -73,7 +75,10 @@ class ZEDSLAMNode(Node):
         self.publish_image = self.get_parameter('publish_image').value
         self.publish_pointcloud = self.get_parameter('publish_pointcloud').value
         self.publish_depth = self.get_parameter('publish_depth').value
-        self.pointcloud_rate = self.get_parameter('pointcloud_rate').value
+        self.pointcloud_rate   = self.get_parameter('pointcloud_rate').value
+        pc_w = self.get_parameter('pointcloud_width').value
+        pc_h = self.get_parameter('pointcloud_height').value
+        self.pc_resolution = sl.Resolution(pc_w, pc_h)
 
         if self.publish_image:
             self.img_pub   = self.create_publisher(Image,       '/zed/zed_node/left/image_rect_color', 1)
@@ -123,6 +128,9 @@ class ZEDSLAMNode(Node):
 
         self.zed.enable_positional_tracking(tracking_params)
         self.runtime_params = sl.RuntimeParameters()
+        # Depth is only needed when the point cloud or depth image threads request it;
+        # disable by default so grab() doesn't pay the NEURAL compute cost every frame.
+        self.runtime_params.enable_depth = self.publish_depth or self.publish_pointcloud
         self.pose = sl.Pose()
 
         self.running = True
@@ -147,12 +155,10 @@ class ZEDSLAMNode(Node):
             t0 = time.monotonic()
 
             if self.pc_pub.get_subscription_count() > 0:
-                self.zed.retrieve_measure(self.pc_mat, sl.MEASURE.XYZRGBA)
+                # XYZBGRA gives [B,G,R,A] color bytes — matches ROS "rgb" field directly
+                self.zed.retrieve_measure(self.pc_mat, sl.MEASURE.XYZBGRA, sl.MEM.CPU, self.pc_resolution)
                 pc_np = self.pc_mat.get_data()
                 h, w  = pc_np.shape[:2]
-                # ZED RGBA [R,G,B,A] → ROS "rgb" expects BGRA [B,G,R,pad]; swap bytes 12↔14
-                pc_u8 = np.ascontiguousarray(pc_np).view(np.uint8).reshape(h, w, 16)
-                pc_u8[:, :, [12, 14]] = pc_u8[:, :, [14, 12]]
                 pc_msg = PointCloud2()
                 pc_msg.header.stamp    = self.get_clock().now().to_msg()
                 pc_msg.header.frame_id = 'zed_left_camera_frame'
@@ -168,7 +174,7 @@ class ZEDSLAMNode(Node):
                 pc_msg.point_step   = 16
                 pc_msg.row_step     = w * 16
                 pc_msg.is_dense     = False
-                pc_msg.data         = pc_u8.tobytes()
+                pc_msg.data         = np.ascontiguousarray(pc_np).tobytes()
                 self.pc_pub.publish(pc_msg)
 
             elapsed = time.monotonic() - t0

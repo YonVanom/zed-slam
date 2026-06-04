@@ -54,7 +54,9 @@ def _launch_setup(context, *args, **kwargs):
     overrides['publish_image'] = LaunchConfiguration('publish_image').perform(context).lower() == 'true'
     overrides['publish_pointcloud'] = LaunchConfiguration('publish_pointcloud').perform(context).lower() == 'true'
     overrides['publish_depth'] = LaunchConfiguration('publish_depth').perform(context).lower() == 'true'
-    overrides['pointcloud_rate'] = float(LaunchConfiguration('pointcloud_rate').perform(context))
+    overrides['pointcloud_rate']   = float(LaunchConfiguration('pointcloud_rate').perform(context))
+    overrides['pointcloud_width']  = int(LaunchConfiguration('pointcloud_width').perform(context))
+    overrides['pointcloud_height'] = int(LaunchConfiguration('pointcloud_height').perform(context))
 
     node = Node(
         package='zed_slam',
@@ -100,6 +102,16 @@ def generate_launch_description():
             'pointcloud_rate',
             default_value='5.0',
             description='Point cloud publish rate in Hz (runs in its own thread)',
+        ),
+        DeclareLaunchArgument(
+            'pointcloud_width',
+            default_value='448',
+            description='Point cloud retrieval width (COMPACT=448, FULL=896)',
+        ),
+        DeclareLaunchArgument(
+            'pointcloud_height',
+            default_value='256',
+            description='Point cloud retrieval height (COMPACT=256, FULL=512)',
         ),
         OpaqueFunction(function=_launch_setup),
     ])
