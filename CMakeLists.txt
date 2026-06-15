@@ -21,6 +21,7 @@ foreach(PACKAGE
   ackermann_msgs
   sensor_msgs
   std_msgs
+  std_srvs
   visualization_msgs
   Eigen3
   tf2_ros
@@ -43,6 +44,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/zed_record.py
   scripts/zed_slam.py
+  scripts/cloud_publisher.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

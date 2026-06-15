@@ -12,11 +12,13 @@ import threading
 import time
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from nav_msgs.msg import Path, Odometry
+from std_msgs.msg import Int32
+from std_srvs.srv import Trigger
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from collections import deque
 import numpy as np
 
-MIN_DIST_SQ = 1.0 ** 2
+MIN_DIST_SQ = .1 
 
 RESOLUTIONS = {
     "HD1200":   sl.RESOLUTION.HD1200,
@@ -47,8 +49,10 @@ class ZEDSLAMNode(Node):
         self.pose_with_covariance_pub = self.create_publisher(PoseWithCovarianceStamped, '/zed/zed_node/pose_with_covariance', 10)
         self.status_pub = self.create_publisher(DiagnosticArray, '/zed/spatial_memory_status', 10)
         self.path_pub   = self.create_publisher(Path,          '/zed/path', 10)
-        self.odom_pub   = self.create_publisher(Odometry,      'odom', 10)
+        self.odom_pub   = self.create_publisher(Odometry,      '/zed/odom', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
+        self._save_lock = threading.Lock()
+        self.create_service(Trigger, '/zed/save_map', self._save_map_cb)
 
         # ---------------- Load Config ----------------
         self.declare_parameter('fps', 30)
@@ -64,6 +68,8 @@ class ZEDSLAMNode(Node):
         self.declare_parameter('pointcloud_rate', 5.0)
         self.declare_parameter('pointcloud_width',  448)
         self.declare_parameter('pointcloud_height', 256)
+        self.declare_parameter('save_pointcloud', False)
+        self.declare_parameter('enable_2d_mode', False)
 
         self.fps = self.get_parameter('fps').value
         self.resolution = self.get_parameter('resolution').value
@@ -79,6 +85,8 @@ class ZEDSLAMNode(Node):
         pc_w = self.get_parameter('pointcloud_width').value
         pc_h = self.get_parameter('pointcloud_height').value
         self.pc_resolution = sl.Resolution(pc_w, pc_h)
+        self.save_pointcloud = self.get_parameter('save_pointcloud').value
+        self.enable_2d_mode = self.get_parameter('enable_2d_mode').value
 
         if self.publish_image:
             self.img_pub   = self.create_publisher(Image,       '/zed/zed_node/left/image_rect_color', 1)
@@ -116,6 +124,10 @@ class ZEDSLAMNode(Node):
         tracking_params.enable_imu_fusion = True
         tracking_params.set_gravity_as_origin = True
         tracking_params.enable_localization_only = self.enable_localization_only
+        tracking_params.enable_2d_ground_mode = self.enable_2d_mode
+
+        if self.enable_2d_mode:
+            self.get_logger().info("2D ground mode enabled — tracking constrained to XY plane")
 
         if self.area_file:
             if not self.initial_mapping:
@@ -127,10 +139,19 @@ class ZEDSLAMNode(Node):
                 self.get_logger().info(f"Initial Mapping with Area File: {self.area_file}")
 
         self.zed.enable_positional_tracking(tracking_params)
+
+        if self.save_pointcloud and self.update_map and self.area_file:
+            self._enable_spatial_mapping()
+        elif self.save_pointcloud:
+            self.get_logger().warn(
+                "save_pointcloud=True but update_map or area_file not set — spatial mapping NOT enabled."
+            )
+            self.save_pointcloud = False
+
         self.runtime_params = sl.RuntimeParameters()
         # Depth is only needed when the point cloud or depth image threads request it;
         # disable by default so grab() doesn't pay the NEURAL compute cost every frame.
-        self.runtime_params.enable_depth = self.publish_depth or self.publish_pointcloud
+        self.runtime_params.enable_depth = self.publish_depth or self.publish_pointcloud or self.save_pointcloud
         self.pose = sl.Pose()
 
         self.running = True
@@ -148,6 +169,57 @@ class ZEDSLAMNode(Node):
         last = self.path_poses[-1].pose.position
         dx, dy, dz = x - last.x, y - last.y, z - last.z
         return dx*dx + dy*dy + dz*dz > MIN_DIST_SQ
+
+    def _save_map_cb(self, request, response):
+        if not (self.update_map and self.area_file):
+            response.success = False
+            response.message = "update_map or area_file not configured — nothing to save"
+            return response
+
+        if not self._save_lock.acquire(blocking=False):
+            response.success = False
+            response.message = "Save already in progress"
+            return response
+
+        try:
+            self.get_logger().info("Service call: saving area map...")
+            self.zed.save_area_map(self.area_file)
+            msg = f"Area map saved to {self.area_file}"
+
+            if self.save_pointcloud:
+                self.get_logger().info("Service call: extracting fused point cloud...")
+                fused_pc = sl.FusedPointCloud()
+                err = self.zed.extract_whole_spatial_map(fused_pc)
+                if err == sl.ERROR_CODE.SUCCESS:
+                    ply_path = os.path.splitext(self.area_file)[0] + '.ply'
+                    if fused_pc.save(ply_path, sl.MESH_FILE_FORMAT.PLY):
+                        msg += f"; PLY saved to {ply_path} ({fused_pc.get_number_of_points()} points)"
+                    else:
+                        msg += "; PLY save failed"
+                else:
+                    msg += f"; PLY extraction failed: {err}"
+
+            self.get_logger().info(msg)
+            response.success = True
+            response.message = msg
+        finally:
+            self._save_lock.release()
+
+        return response
+
+    def _enable_spatial_mapping(self):
+        mapping_params = sl.SpatialMappingParameters()
+        mapping_params.map_type = sl.SPATIAL_MAP_TYPE.FUSED_POINT_CLOUD
+        mapping_params.set_resolution(sl.MAPPING_RESOLUTION.MEDIUM)
+        mapping_params.set_range(sl.MAPPING_RANGE.AUTO)
+        mapping_params.save_texture = False
+        err = self.zed.enable_spatial_mapping(mapping_params)
+        if err != sl.ERROR_CODE.SUCCESS:
+            self.get_logger().error(f"Failed to enable spatial mapping: {err}. PLY will NOT be saved.")
+            self.save_pointcloud = False
+        else:
+            ply_path = os.path.splitext(self.area_file)[0] + '.ply'
+            self.get_logger().info(f"Spatial mapping enabled. Fused pointcloud will be saved to: {ply_path}")
 
     def _pc_loop(self):
         interval = 1.0 / self.pointcloud_rate
@@ -189,15 +261,13 @@ class ZEDSLAMNode(Node):
 
             state = self.zed.get_position(self.pose)
             if state != sl.POSITIONAL_TRACKING_STATE.OK:
-                self.get_logger().warn_once("Tracking lost")
+                self.get_logger().warn("Tracking lost", once=True)
                 continue
-
             mem_status = self.zed.get_positional_tracking_status().spatial_memory_status
 
             if mem_status != self.last_mem_status:
                 self.get_logger().info(f"Memory status changed: {STATUS_MAP.get(mem_status, 'UNKNOWN')}")
                 self.last_mem_status = mem_status
-
             # Extract pose data
             t = self.pose.get_translation(sl.Translation())
             x, y, z = t.get()
@@ -259,14 +329,6 @@ class ZEDSLAMNode(Node):
             pose_msg.pose.orientation.w = w_or
 
             self.pose_pub.publish(pose_msg)
-            
-            pose_with_covariance_msg = PoseWithCovarianceStamped()
-            pose_with_covariance_msg.header.stamp = stamp
-            pose_with_covariance_msg.header.frame_id = "map"
-            pose_with_covariance_msg.pose.pose = pose_msg.pose
-            pose_with_covariance_msg.pose.covariance = self.pose.pose_covariance.flatten().tolist()
-            
-            self.pose_with_covariance_pub.publish(pose_with_covariance_msg)
 
             # ---------------- Odom Publish ----------------
             odom_msg = Odometry()
@@ -315,7 +377,8 @@ class ZEDSLAMNode(Node):
 
             # ---------------- Path Publish ----------------
             self.path_poses = self.path_poses
-
+            if mem_status == sl.SPATIAL_MEMORY_STATUS.INITIALIZING:
+            	continue
             if self._moved_enough(x, y, z):
                 self.path_poses.append(pose_msg)
 
@@ -336,6 +399,23 @@ class ZEDSLAMNode(Node):
         if self.update_map and self.area_file:
             self.get_logger().info("Saving area map before shutdown...")
             self.zed.save_area_map(self.area_file)
+
+        if self.save_pointcloud:
+            self.get_logger().info("Extracting fused point cloud (this may take a few seconds)...")
+            fused_pc = sl.FusedPointCloud()
+            err = self.zed.extract_whole_spatial_map(fused_pc)
+            if err == sl.ERROR_CODE.SUCCESS:
+                ply_path = os.path.splitext(self.area_file)[0] + '.ply'
+                if fused_pc.save(ply_path, sl.MESH_FILE_FORMAT.PLY):
+                    self.get_logger().info(
+                        f"Fused point cloud saved to {ply_path} "
+                        f"({fused_pc.get_number_of_points()} points)"
+                    )
+                else:
+                    self.get_logger().error(f"fused_pc.save() failed for path: {ply_path}")
+            else:
+                self.get_logger().error(f"extract_whole_spatial_map failed: {err}")
+            self.zed.disable_spatial_mapping()
 
         self.zed.disable_positional_tracking()
         self.zed.close()

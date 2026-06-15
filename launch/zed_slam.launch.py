@@ -57,6 +57,8 @@ def _launch_setup(context, *args, **kwargs):
     overrides['pointcloud_rate']   = float(LaunchConfiguration('pointcloud_rate').perform(context))
     overrides['pointcloud_width']  = int(LaunchConfiguration('pointcloud_width').perform(context))
     overrides['pointcloud_height'] = int(LaunchConfiguration('pointcloud_height').perform(context))
+    overrides['save_pointcloud'] = LaunchConfiguration('save_pointcloud').perform(context).lower() == 'true'
+    overrides['enable_2d_mode'] = LaunchConfiguration('enable_2d_mode').perform(context).lower() == 'true'
 
     node = Node(
         package='zed_slam',
@@ -112,6 +114,16 @@ def generate_launch_description():
             'pointcloud_height',
             default_value='256',
             description='Point cloud retrieval height (COMPACT=256, FULL=512)',
+        ),
+        DeclareLaunchArgument(
+            'save_pointcloud',
+            default_value='false',
+            description='Save fused PLY pointcloud alongside area_file on shutdown/service call (mapping/lifetime modes only)',
+        ),
+        DeclareLaunchArgument(
+            'enable_2d_mode',
+            default_value='false',
+            description='Constrain positional tracking to the XY ground plane (sets enable_2d_ground_mode in ZED SDK)',
         ),
         OpaqueFunction(function=_launch_setup),
     ])

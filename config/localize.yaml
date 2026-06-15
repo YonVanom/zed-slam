@@ -2,11 +2,11 @@
   ros__parameters:
     # Camera Settings
     fps: 60
-    resolution: "SVGA"  # Options: HD2K, HD1080, SVGA
+    resolution: "HD1080"  # Options: HD2K, HD1080, SVGA
     depth_mode: "NEURAL_LIGHT"  # Options: NEURAL, NEURAL_LIGHT, NEURAL_PLUS
 
     # Map / Area File
-    area_file: "/home/autoware/zed_slam/src/zed-slam/data/maps/hallway.area"
+    area_file: "/home/autoware/zed_slam/src/zed-slam/data/maps/moore_manual_3.area"
 
     # Mapping Mode
     # initial_mapping: true  -> build a brand-new map
@@ -26,3 +26,6 @@
     pointcloud_rate: 5.0    # Hz; point cloud runs in its own thread at this rate
     pointcloud_width: 448   # COMPACT = NEURAL_W/2 (default in zed-ros2-wrapper)
     pointcloud_height: 256  # COMPACT = NEURAL_H/2
+
+    # 2D mode: constrain tracking to XY ground plane (enable_2d_ground_mode in ZED SDK)
+    enable_2d_mode: false
